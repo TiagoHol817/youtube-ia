@@ -492,8 +492,20 @@ const storage = {
   set: (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-// ─── IMAGE GENERATION ENGINE ───────────────────────────────────────────────
+// ─── API PROXY (all calls go server-side to avoid CORS) ───────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const API_PROXY = '/api/generate';
+
+async function callProxy(payload) {
+  const res = await fetch(API_PROXY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Proxy error ' + res.status);
+  return data;
+}
 
 async function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -504,250 +516,70 @@ async function blobToBase64(blob) {
   });
 }
 
-// STEP 1: Generate visual scene prompts using EXACT same method as course app
+// STEP 1: Expand single prompt via proxy
 async function expandPromptWithGemini(rawPrompt, style, apiKey) {
   if (!apiKey) return rawPrompt;
   try {
-    const visualStyle = style && style !== 'Auto (IA)'
-      ? style
-      : 'Cinematic photorealistic style, dramatic lighting, high detail, 8K quality';
-
-    const systemPrompt = `
-    ROLE: Expert Film Director & Forensic Image Analyst.
-    
-    TASK: Convert this script narration into a detailed visual scene prompt.
-
-    FULL SCRIPT CONTEXT:
-    """
-    ${rawPrompt}
-    """
-    
-    **VISUAL STYLE:** "${visualStyle}". Use this specific style.
-
-    **DYNAMIC ACTION PROTOCOL (CRITICAL):**
-    - VISUALIZE THE VERB: The visual prompt MUST represent the exact action described.
-    - NO STATIC POSES: Capture motion, emotion and narrative dynamically.
-    - ACTING: Characters and environment must "act out" the script.
-
-    RULES:
-    1. CINEMATOGRAPHY: Prioritize Close-up or Extreme Close-up shots unless scene demands wide view.
-    2. ENGLISH OUTPUT: Visual prompt must be in English.
-    3. MAX 150 words.
-    4. Return ONLY the image prompt, no explanations.
-    `;
-
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: systemPrompt }], role: 'user' }],
-          generationConfig: { temperature: 1, topP: 0.95 }
-        })
-      }
-    );
-    if (!res.ok) {
-      // fallback to gemini-2.0-flash
-      const res2 = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: systemPrompt }], role: 'user' }]
-          })
-        }
-      );
-      if (!res2.ok) return rawPrompt + ', ' + visualStyle;
-      const d2 = await res2.json();
-      return d2.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || rawPrompt;
-    }
-    const data = await res.json();
-    const expanded = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    console.log('Visual prompt generated:', expanded?.slice(0,80) + '...');
-    return expanded || rawPrompt;
-  } catch(e) {
-    console.warn('Prompt expansion failed:', e.message);
-    return rawPrompt;
-  }
+    const vs = style && style !== 'Auto (IA)' ? style : 'Cinematic photorealistic, dramatic lighting, 8K';
+    const promptText = `You are a cinematic image prompt writer. Convert this narration to a vivid image prompt in English. Style: "${vs}". Max 120 words. ONLY the prompt, nothing else.\nScript: "${rawPrompt}"`;
+    const data = await callProxy({ type: 'expand', prompt: promptText, geminiKey: apiKey });
+    console.log('Expanded:', data.result?.slice(0,80));
+    return data.result || rawPrompt;
+  } catch(e) { console.warn('Expand error:', e.message); return rawPrompt; }
 }
 
-// Generate scenes JSON (batch mode - exactly like course app)
+// STEP 1b: Generate all scenes at once (batch - like course app)
 async function generateScenesFromScript(script, style, imgsPerPara, apiKey) {
   if (!apiKey) return null;
   try {
-    const visualStyle = style && style !== 'Auto (IA)'
-      ? style
-      : 'Cinematic photorealistic style, dramatic lighting, high detail';
-
+    const vs = style && style !== 'Auto (IA)' ? style : 'Cinematic photorealistic, dramatic lighting, 8K';
     const paragraphs = script.split('\n').filter(p => p.trim().length > 5);
-    const scenesPerPara = imgsPerPara === 'auto' ? 1 : parseInt(imgsPerPara);
-
-    const inputBatch = paragraphs.map((p, i) =>
-      `PARAGRAPH_ID_${i} [REQUIRED_SCENES: ${scenesPerPara}]:\n"${p}"`
-    ).join('\n\n');
-
-    const promptText = `
-    ROLE: Expert Film Director & Forensic Image Analyst.
-    
-    TASK: Split the provided text paragraphs into detailed visual scene prompts strictly following the requested scene counts.
-
-    FULL SCRIPT CONTEXT (READ FIRST for Character Consistency):
-    """
-    ${script}
-    """
-    
-    **VISUAL STYLE:** "${visualStyle}". Use this specific style.
-
-    INPUT BATCH (Do NOT Skip Any Text):
-    ---
-    ${inputBatch}
-    ---
-
-    **VISUAL CONSISTENCY:** Ensure all scenes look like they belong to the same project. Start prompts with the style definition.
-
-    **DYNAMIC ACTION PROTOCOL (CRITICAL):**
-    - VISUALIZE THE VERB: The visual prompt MUST represent the exact action described in the text segment.
-    - NO STATIC POSES: If text says "swimming", character must be actively swimming.
-    - ACTING: Characters and environment must "act out" the script. Capture emotion dynamically.
-
-    CRITICAL RULES:
-    1. MATHEMATICAL OBEDIENCE: You see "[REQUIRED_SCENES: X]". Generate EXACTLY X scenes per paragraph.
-    2. ZERO DATA LOSS: "script_segment" fields MUST combine to equal the EXACT original paragraph text.
-    3. SEQUENTIAL: Scenes must cover paragraph from start to finish.
-    4. CINEMATOGRAPHY: Prioritize Close-up shots unless scene demands wide view.
-    5. ENGLISH OUTPUT: Visual prompts must be in English.
-
-    OUTPUT: Return JSON array only.
-    `;
-
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: promptText }], role: 'user' }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: 'ARRAY',
-              items: {
-                type: 'OBJECT',
-                properties: {
-                  paragraph_index: { type: 'INTEGER' },
-                  scenes: {
-                    type: 'ARRAY',
-                    items: {
-                      type: 'OBJECT',
-                      properties: {
-                        script_segment: { type: 'STRING' },
-                        visual_prompt: { type: 'STRING' }
-                      },
-                      required: ['script_segment', 'visual_prompt']
-                    }
-                  }
-                },
-                required: ['paragraph_index', 'scenes']
-              }
-            }
-          }
-        })
-      }
-    );
-    if (!res.ok) throw new Error('Scene generation failed: ' + res.status);
-    const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return JSON.parse(text);
-  } catch(e) {
-    console.warn('Scene batch generation failed:', e.message);
-    return null;
-  }
+    const n = imgsPerPara === 'auto' ? 1 : parseInt(imgsPerPara);
+    const inputBatch = paragraphs.map((p, i) => `PARAGRAPH_ID_${i} [REQUIRED_SCENES: ${n}]:\n"${p}"`).join('\n\n');
+    const promptText = `ROLE: Expert Film Director.\nTASK: Split paragraphs into visual scene prompts.\nSCRIPT: """${script}"""\nSTYLE: "${vs}"\nINPUT:\n---\n${inputBatch}\n---\nRULES: EXACTLY the required scenes per paragraph. script_segment = exact original text. visual_prompt in English. Cinematic close-up shots preferred.`;
+    const data = await callProxy({ type: 'scenes', prompt: promptText, geminiKey: apiKey });
+    return data.result;
+  } catch(e) { console.warn('Scenes batch error:', e.message); return null; }
 }
 
-// STEP 2a: Generate with Gemini 2.5 Flash (same as course app!)
-async function tryGeminiImage(prompt, apiKey) {
-  if (!apiKey) throw new Error('No API key');
-  // Gemini 2.5 Flash with image generation - exactly what the course app uses
-  const models = [
-    'gemini-2.5-flash-preview-04-17',
-    'gemini-2.0-flash-preview-image-generation',
-    'gemini-2.0-flash-exp'
-  ];
-  for (const model of models) {
+// STEP 2: Generate image via proxy (Whisk → Gemini Imagen → fallback)
+async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style, whiskToken) {
+  const expandedPrompt = await expandPromptWithGemini(rawPrompt, style, apiKey);
+
+  // Try Whisk via proxy (no CORS issue server-side)
+  if (whiskToken) {
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseModalities: ['TEXT', 'IMAGE'],
-              temperature: 1,
-              topP: 0.95,
-            }
-          })
-        }
-      );
-      if (!res.ok) { console.warn('Model', model, 'failed:', res.status); continue; }
-      const data = await res.json();
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const imgPart = parts.find(p => p.inlineData);
-      if (imgPart) {
-        console.log('Image generated with model:', model);
-        return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
-      }
-    } catch(e) { console.warn('Model', model, 'error:', e.message); }
+      const data = await callProxy({ type: 'image_whisk', prompt: expandedPrompt, aspectRatio, whiskToken });
+      if (data.image) return data.image;
+    } catch(e) { console.warn('Whisk proxy error:', e.message); }
   }
-  throw new Error('All Gemini image models failed');
-}
 
-// STEP 2b: Pollinations fallback (free, no key) - with smart retry
-async function tryPollinations(prompt, aspectRatio) {
+  // Try Gemini image via proxy
+  if (apiKey) {
+    try {
+      const data = await callProxy({ type: 'image_gemini', prompt: expandedPrompt, aspectRatio, geminiKey: apiKey });
+      if (data.image) return data.image;
+    } catch(e) { console.warn('Gemini image proxy error:', e.message); }
+  }
+
+  // Last resort: Pollinations (direct, no proxy needed)
+  await sleep(2000);
   const w = aspectRatio === '16:9' ? 1280 : aspectRatio === '9:16' ? 720 : 1024;
   const h = aspectRatio === '16:9' ? 720  : aspectRatio === '9:16' ? 1280 : 1024;
-  const encoded = encodeURIComponent(prompt);
-  const models = ['flux', 'turbo', 'flux-realism'];
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const model = models[attempt % models.length];
-    const seed = Math.floor(Math.random() * 999999);
-    const waitMs = attempt === 0 ? 1000 : 4000 * attempt;
-    await sleep(waitMs);
-    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&seed=${seed}&model=${model}&nologo=true&nofeed=true&safe=false`;
+  const encoded = encodeURIComponent(expandedPrompt.slice(0, 400));
+  const seed = Math.floor(Math.random() * 999999);
+  for (const model of ['flux', 'turbo', 'flux-realism']) {
+    await sleep(3000);
     try {
+      const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&seed=${seed}&model=${model}&nologo=true&nofeed=true`;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 35000);
+      const timer = setTimeout(() => controller.abort(), 40000);
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
-      if (res.ok && res.headers.get('content-type')?.startsWith('image')) {
-        return await blobToBase64(await res.blob());
-      }
-      console.warn(`Pollinations attempt ${attempt+1} status:`, res.status);
-    } catch(e) { 
-      console.warn(`Pollinations attempt ${attempt+1} error:`, e.message);
-    }
+      if (res.ok) return await blobToBase64(await res.blob());
+    } catch(e) { console.warn('Pollinations error:', e.message); }
   }
-  throw new Error('Pollinations exhausted all retries');
-}
-
-// MAIN: expand prompt with Gemini text, then generate image with Gemini 2.5 Flash
-async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style, whiskToken) {
-  // 1. Expand prompt with Gemini text (same as course app)
-  const expandedPrompt = await expandPromptWithGemini(rawPrompt, style, apiKey);
-  console.log('Expanded prompt:', expandedPrompt);
-
-  // 2. Generate image with Gemini 2.5 Flash (exactly what course app uses)
-  if (apiKey) {
-    try { return await tryGeminiImage(expandedPrompt, apiKey); }
-    catch(e) { console.warn('Gemini image error:', e.message); }
-  }
-
-  // 3. Fallback: Pollinations (no key needed)
-  console.log('Falling back to Pollinations...');
-  return await tryPollinations(expandedPrompt, aspectRatio);
+  throw new Error('All image providers failed');
 }
 
 // ─── MAIN APP ──────────────────────────────────────────────────────────────

@@ -494,19 +494,21 @@ const storage = {
 
 // ─── GEMINI IMAGE GEN ──────────────────────────────────────────────────────
 async function generateImageGemini(prompt, apiKey, aspectRatio='1:1') {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`, {
+  // Use gemini-2.0-flash-preview-image-generation (free tier)
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: { sampleCount: 1, aspectRatio }
+      contents: [{ parts: [{ text: prompt + '. High quality, cinematic, detailed.' }] }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
     })
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || 'Gemini error');
-  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-  if (!b64) throw new Error('No image returned');
-  return `data:image/png;base64,${b64}`;
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const imgPart = parts.find(p => p.inlineData);
+  if (!imgPart) throw new Error('No image returned');
+  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
 }
 
 // ─── MAIN APP ──────────────────────────────────────────────────────────────
@@ -1003,6 +1005,11 @@ function ScenesGrid({ scenes, aspect }) {
   );
 }
 
+// ─── RENDER ────────────────────────────────────────────────────────────────
+ReactDOM.render(<App/>, document.getElementById('root'));
+</script>
+</body>
+</html>
 // ─── RENDER ────────────────────────────────────────────────────────────────
 ReactDOM.render(<App/>, document.getElementById('root'));
 </script>

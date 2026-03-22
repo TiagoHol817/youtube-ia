@@ -534,42 +534,87 @@ async function expandPromptWithGemini(rawPrompt, style, apiKey) {
 // STEP 2a: Generate with Google Whisk (Bearer token, renews daily)
 async function tryWhisk(prompt, aspectRatio, whiskToken) {
   if (!whiskToken) throw new Error('No Whisk token');
-  const aspectMap = { '16:9': 'IMAGE_ASPECT_RATIO_LANDSCAPE', '9:16': 'IMAGE_ASPECT_RATIO_PORTRAIT', '1:1': 'IMAGE_ASPECT_RATIO_SQUARE' };
-  const res = await fetch('https://labs.google/fx/api/v1/images:generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${whiskToken}`
+  const aspectMap = {
+    '16:9': 'IMAGE_ASPECT_RATIO_LANDSCAPE',
+    '9:16': 'IMAGE_ASPECT_RATIO_PORTRAIT',
+    '1:1':  'IMAGE_ASPECT_RATIO_SQUARE'
+  };
+  // Try multiple known Whisk endpoints
+  const endpoints = [
+    {
+      url: 'https://labs.google/fx/api/v1/whisk:run',
+      body: {
+        imagePrompt: { parts: [{ text: prompt }] },
+        imageStyle: { parts: [{ text: '' }] },
+        generateImageConfig: {
+          aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
+          numberOfImages: 1
+        }
+      }
     },
-    body: JSON.stringify({
-      prompt: prompt,
-      aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
-      modelId: 'imagen-3.0-generate-002',
-      outputOptions: { mimeType: 'image/jpeg', compressionQuality: 90 }
-    })
-  });
-  if (!res.ok) throw new Error('Whisk failed: ' + res.status);
-  const data = await res.json();
-  const b64 = data.images?.[0]?.bytesBase64Encoded || data.predictions?.[0]?.bytesBase64Encoded;
-  if (!b64) throw new Error('No image from Whisk');
-  return `data:image/jpeg;base64,${b64}`;
+    {
+      url: 'https://aisandbox-pa.googleapis.com/v1:whisk',
+      body: {
+        imagePrompt: { parts: [{ text: prompt }] },
+        imageStyle: { parts: [{ text: '' }] },
+        generateImageConfig: {
+          aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
+          numberOfImages: 1
+        }
+      }
+    }
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const res = await fetch(ep.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${whiskToken}`,
+          'X-Goog-Api-Key': ''
+        },
+        body: JSON.stringify(ep.body)
+      });
+      if (!res.ok) { console.warn('Whisk endpoint failed:', ep.url, res.status); continue; }
+      const data = await res.json();
+      // Try different response shapes
+      const b64 = data.imageParts?.[0]?.imageUri?.split(',')[1]
+        || data.images?.[0]?.bytesBase64Encoded
+        || data.predictions?.[0]?.bytesBase64Encoded
+        || data.generatedImages?.[0]?.image?.imageBytes;
+      if (b64) return `data:image/jpeg;base64,${b64}`;
+    } catch(e) { console.warn('Whisk error on', ep.url, e.message); }
+  }
+  throw new Error('All Whisk endpoints failed');
 }
 
-// STEP 2b: Pollinations fallback (free, no key)
+// STEP 2b: Pollinations fallback (free, no key) - with smart retry
 async function tryPollinations(prompt, aspectRatio) {
   const w = aspectRatio === '16:9' ? 1280 : aspectRatio === '9:16' ? 720 : 1024;
   const h = aspectRatio === '16:9' ? 720  : aspectRatio === '9:16' ? 1280 : 1024;
   const encoded = encodeURIComponent(prompt);
-  const seed = Math.floor(Math.random() * 999999);
-  for (const model of ['flux', 'turbo']) {
-    await sleep(2000);
-    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&seed=${seed}&model=${model}&nologo=true&nofeed=true`;
+  const models = ['flux', 'turbo', 'flux-realism'];
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const model = models[attempt % models.length];
+    const seed = Math.floor(Math.random() * 999999);
+    const waitMs = attempt === 0 ? 1000 : 4000 * attempt;
+    await sleep(waitMs);
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&seed=${seed}&model=${model}&nologo=true&nofeed=true&safe=false`;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      if (res.ok) return await blobToBase64(await res.blob());
-    } catch(e) { /* try next */ }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 35000);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok && res.headers.get('content-type')?.startsWith('image')) {
+        return await blobToBase64(await res.blob());
+      }
+      console.warn(`Pollinations attempt ${attempt+1} status:`, res.status);
+    } catch(e) { 
+      console.warn(`Pollinations attempt ${attempt+1} error:`, e.message);
+    }
   }
-  throw new Error('Pollinations also failed');
+  throw new Error('Pollinations exhausted all retries');
 }
 
 // MAIN: expand prompt with Gemini, generate image with Whisk

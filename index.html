@@ -492,21 +492,95 @@ const storage = {
   set: (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-// ─── GEMINI IMAGE GEN ──────────────────────────────────────────────────────
-async function generateImageGemini(prompt, apiKey, aspectRatio='1:1') {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: { sampleCount: 1, aspectRatio }
-    })
+// ─── IMAGE GENERATION ENGINE ───────────────────────────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
+}
+
+// STEP 1: Expand prompt using Gemini text (like the course app does)
+async function expandPromptWithGemini(rawPrompt, style, apiKey) {
+  if (!apiKey) return rawPrompt;
+  try {
+    const styleNote = style ? `Visual style: ${style}.` : '';
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text:
+            `You are a cinematic image prompt writer. Convert this script narration into a vivid, detailed image generation prompt in English. ${styleNote}
+            Keep it under 200 words. Focus on: visual composition, lighting, atmosphere, colors, camera angle.
+            Script: "${rawPrompt}"
+            Respond with ONLY the image prompt, nothing else.`
+          }]}]
+        })
+      }
+    );
+    if (!res.ok) return rawPrompt;
+    const data = await res.json();
+    const expanded = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    return expanded || rawPrompt;
+  } catch(e) { return rawPrompt; }
+}
+
+// STEP 2a: Generate with Gemini imagen
+async function tryGeminiImage(prompt, apiKey) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+      })
+    }
+  );
+  if (!res.ok) throw new Error('Gemini image failed: ' + res.status);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'Gemini error');
-  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
-  if (!b64) throw new Error('No image returned');
-  return `data:image/png;base64,${b64}`;
+  const imgPart = (data.candidates?.[0]?.content?.parts || []).find(p => p.inlineData);
+  if (!imgPart) throw new Error('No image in response');
+  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+}
+
+// STEP 2b: Pollinations fallback (free, no key)
+async function tryPollinations(prompt, aspectRatio) {
+  const w = aspectRatio === '16:9' ? 1280 : aspectRatio === '9:16' ? 720 : 1024;
+  const h = aspectRatio === '16:9' ? 720  : aspectRatio === '9:16' ? 1280 : 1024;
+  const encoded = encodeURIComponent(prompt);
+  const seed = Math.floor(Math.random() * 999999);
+  for (const model of ['flux', 'turbo']) {
+    await sleep(2000);
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&seed=${seed}&model=${model}&nologo=true&nofeed=true`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) return await blobToBase64(await res.blob());
+    } catch(e) { /* try next */ }
+  }
+  throw new Error('All providers failed');
+}
+
+// MAIN: expand prompt then generate image
+async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style) {
+  // 1. Expand the prompt with AI (mimics course app behavior)
+  const expandedPrompt = await expandPromptWithGemini(rawPrompt, style, apiKey);
+  console.log('Expanded prompt:', expandedPrompt);
+
+  // 2. Generate image
+  if (apiKey) {
+    try { return await tryGeminiImage(expandedPrompt, apiKey); }
+    catch(e) { console.warn('Gemini image error:', e.message); }
+  }
+  // 3. Fallback to Pollinations
+  return await tryPollinations(expandedPrompt, aspectRatio);
 }
 
 // ─── MAIN APP ──────────────────────────────────────────────────────────────
@@ -639,6 +713,8 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
   const [refImages, setRefImages] = useState([]);
   const [imgsPerPara, setImgsPerPara] = useState('auto');
   const [aspect, setAspect] = useState('9:16');
+  const [visualStyle, setVisualStyle] = useState('');
+  const [showStyleModal, setShowStyleModal] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -646,7 +722,7 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
   const refRef = useRef();
 
   const createScenes = async () => {
-    if (!hasKeys || !script.trim()) return;
+    if (!script.trim()) return;
     const paragraphs = script.split('\n').filter(p=>p.trim().length>10);
     const count = imgsPerPara==='auto' ? Math.ceil(paragraphs.length*1.2) : paragraphs.length * parseInt(imgsPerPara);
     const initial = paragraphs.slice(0, Math.min(count,12)).map((p,i)=>({id:i,title:p.slice(0,40),status:'pending',img:null}));
@@ -657,8 +733,9 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
       try {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
         const prompt = `${masterPrompt ? masterPrompt+'. ' : ''}${initial[i].title}. Cinematic, high quality, ${aspect==='9:16'?'vertical portrait':'aspect ratio '+aspect}`;
-        const img = await generateImageGemini(prompt, getKey(), aspect);
+        const img = await generateImageGemini(prompt, getKey(), aspect, visualStyle);
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
+        if (i < initial.length - 1) await sleep(2000);
       } catch(e) {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'error'}:s));
       }
@@ -736,7 +813,24 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
         </div>
       )}
 
-      <button className="btn-primary" disabled={!hasKeys||!script.trim()||generating} onClick={createScenes}>
+      <div className="card" style={{borderLeft:'3px solid var(--accent2)'}}>
+        <div className="card-header">
+          <span style={{fontSize:18}}>🎨</span>
+          <span className="card-title">Estilo Visual</span>
+          <span className="card-badge badge-optional" style={{marginLeft:'auto'}}>
+            {visualStyle || 'Auto (IA)'}
+          </span>
+        </div>
+        <div className="segment" style={{flexWrap:'wrap'}}>
+          {['Auto (IA)','Realismo Cinemático','Sci-Fi','Épica Bíblica','Anime Vibrante','Render 3D Moderno','Cyberpunk Noir','Fantasía Épica','Terror Psicológico','Pintura Acuarela','Documental'].map(s=>(
+            <button key={s} className={`seg-btn ${(visualStyle===s||(s==='Auto (IA)'&&!visualStyle))?'active':''}`}
+              onClick={()=>setVisualStyle(s==='Auto (IA)'?'':s)} style={{fontSize:11}}>
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button className="btn-primary" disabled={!script.trim()||generating} onClick={createScenes}>
         <IStar/> {t.createScenes}
       </button>
 
@@ -765,7 +859,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
 
   const createScenes = async () => {
     const prompts = getPrompts();
-    if (!hasKeys || !prompts.length) return;
+    if (!prompts.length) return;
     const initial = prompts.map((p,i)=>({id:i,title:p.slice(0,50),status:'pending',img:null}));
     setScenes(initial); setGenerating(true); setProgress(0);
     for (let i=0;i<initial.length;i++) {
@@ -773,6 +867,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
         const img = await generateImageGemini(initial[i].title+`. High quality cinematic image, aspect ${aspect}`, getKey(), aspect);
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
+        if (i < initial.length - 1) await sleep(2000);
       } catch {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'error'}:s));
       }
@@ -826,7 +921,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
         </div>
       )}
 
-      <button className="btn-primary" disabled={!hasKeys||generating||!getPrompts().length} onClick={createScenes}>
+      <button className="btn-primary" disabled={generating||!getPrompts().length} onClick={createScenes}>
         <IStar/> {t.createScenes} {getPrompts().length>0?`(${getPrompts().length})`:''}
       </button>
 

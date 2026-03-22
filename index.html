@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>VideoAI Pro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #080c14;
+    --surface: #0d1321;
+    --surface2: #131c2e;
+    --border: #1e2d45;
+    --accent: #6c47ff;
+    --accent2: #00d4aa;
+    --accent3: #ff6b35;
+    --text: #e8edf5;
+    --muted: #5a6a80;
+    --danger: #ff4757;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; overflow-x: hidden; }
+
+  /* NOISE OVERLAY */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+  }
+
+  /* LAYOUT */
+  .app { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+
+  /* SIDEBAR */
+  .sidebar {
+    width: 72px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center; padding: 20px 0; gap: 8px;
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 100;
+    transition: width 0.3s cubic-bezier(.4,0,.2,1);
+  }
+  .sidebar.open { width: 220px; align-items: flex-start; padding: 20px 12px; }
+  .logo { width: 44px; height: 44px; background: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  .logo svg { width: 22px; height: 22px; fill: white; }
+  .sidebar-toggle { background: none; border: none; color: var(--muted); cursor: pointer; padding: 8px; border-radius: 8px; margin-top: 4px; }
+  .sidebar-toggle:hover { color: var(--text); background: var(--surface2); }
+
+  .nav-items { display: flex; flex-direction: column; gap: 4px; width: 100%; margin-top: 12px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px;
+    cursor: pointer; color: var(--muted); font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13px;
+    transition: all 0.15s; white-space: nowrap; overflow: hidden; text-decoration: none;
+    border: none; background: none; width: 100%;
+  }
+  .nav-item:hover { color: var(--text); background: var(--surface2); }
+  .nav-item.active { color: var(--text); background: linear-gradient(135deg, rgba(108,71,255,0.25), rgba(0,212,170,0.1)); border: 1px solid rgba(108,71,255,0.3); }
+  .nav-icon { width: 20px; height: 20px; flex-shrink: 0; }
+  .nav-label { opacity: 0; transition: opacity 0.2s; }
+  .sidebar.open .nav-label { opacity: 1; }
+
+  .user-pill {
+    margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-radius: 10px; background: var(--surface2); border: 1px solid var(--border);
+    cursor: pointer; width: 100%; overflow: hidden;
+  }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+  .user-info { overflow: hidden; }
+  .user-name { font-size: 12px; font-weight: 600; font-family: 'Syne', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-plan { font-size: 10px; color: var(--accent2); }
+
+  /* MAIN */
+  .main { margin-left: 72px; flex: 1; display: flex; flex-direction: column; transition: margin-left 0.3s cubic-bezier(.4,0,.2,1); }
+  .sidebar.open ~ .main { margin-left: 220px; }
+
+  /* TOPBAR */
+  .topbar {
+    height: 60px; border-bottom: 1px solid var(--border); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 28px; background: rgba(8,12,20,0.8);
+    backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 50;
+  }
+  .page-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 18px; }
+  .lang-toggle {
+    display: flex; gap: 4px; background: var(--surface2); border-radius: 8px; padding: 3px;
+    border: 1px solid var(--border);
+  }
+  .lang-btn {
+    padding: 4px 10px; border-radius: 6px; border: none; background: none; color: var(--muted);
+    font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Syne', sans-serif;
+    transition: all 0.15s;
+  }
+  .lang-btn.active { background: var(--accent); color: white; }
+  .settings-btn {
+    width: 36px; height: 36px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--muted);
+    transition: all 0.15s;
+  }
+  .settings-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* CONTENT */
+  .content { flex: 1; padding: 28px; max-width: 900px; }
+
+  /* TABS */
+  .mode-tabs { display: flex; gap: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 6px; margin-bottom: 28px; }
+  .mode-tab {
+    flex: 1; padding: 10px 16px; border-radius: 10px; border: none; background: none;
+    color: var(--muted); font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px;
+    cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .mode-tab:hover { color: var(--text); }
+  .mode-tab.active { background: var(--accent); color: white; box-shadow: 0 4px 20px rgba(108,71,255,0.4); }
+
+  /* CARDS */
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px; margin-bottom: 16px; transition: border-color 0.2s;
+  }
+  .card:hover { border-color: rgba(108,71,255,0.3); }
+  .card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .card-num { width: 26px; height: 26px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; font-family: 'Syne', sans-serif; color: var(--muted); }
+  .card-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; }
+  .card-badge { font-size: 10px; padding: 2px 8px; border-radius: 20px; font-weight: 600; margin-left: auto; }
+  .badge-optional { background: rgba(90,106,128,0.2); color: var(--muted); }
+  .badge-required { background: rgba(108,71,255,0.2); color: var(--accent); }
+
+  /* INPUTS */
+  textarea, input[type="text"], input[type="number"], select {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); padding: 12px 14px; font-family: 'DM Sans', sans-serif; font-size: 14px;
+    resize: vertical; outline: none; transition: border-color 0.2s;
+  }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  textarea::placeholder, input::placeholder { color: var(--muted); }
+  select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%235a6a80' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
+
+  label { font-size: 12px; font-weight: 500; color: var(--muted); display: block; margin-bottom: 6px; letter-spacing: 0.05em; text-transform: uppercase; }
+
+  /* UPLOAD ZONE */
+  .upload-zone {
+    border: 1.5px dashed var(--border); border-radius: 12px; padding: 28px 20px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;
+    transition: all 0.2s; text-align: center;
+  }
+  .upload-zone:hover { border-color: var(--accent); background: rgba(108,71,255,0.04); }
+  .upload-zone svg { opacity: 0.4; }
+  .upload-zone p { font-size: 14px; color: var(--muted); }
+  .upload-zone span { font-size: 12px; color: var(--muted); opacity: 0.6; }
+  input[type="file"] { display: none; }
+
+  /* SEGMENT CONTROL */
+  .segment { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg-btn {
+    padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2);
+    color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Syne', sans-serif;
+    transition: all 0.15s;
+  }
+  .seg-btn:hover { color: var(--text); border-color: var(--muted); }
+  .seg-btn.active { background: var(--accent); color: white; border-color: var(--accent); box-shadow: 0 0 16px rgba(108,71,255,0.35); }
+
+  /* GRID */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media(max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ROW */
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row-auto { display: flex; gap: 14px; align-items: flex-start; }
+  .row-auto .field { flex: 1; }
+
+  /* FIELD */
+  .field { margin-bottom: 0; }
+  .field + .field, .field + .card { margin-top: 14px; }
+
+  /* BUTTONS */
+  .btn-primary {
+    width: 100%; padding: 15px; background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    color: white; border: none; border-radius: 12px; font-family: 'Syne', sans-serif;
+    font-weight: 700; font-size: 15px; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; gap: 10px; transition: all 0.2s; position: relative; overflow: hidden;
+    margin-top: 20px;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 30px rgba(108,71,255,0.5); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-primary::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.1));
+  }
+
+  .btn-secondary {
+    padding: 10px 18px; background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px; font-family: 'Syne', sans-serif; font-weight: 600;
+    font-size: 13px; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ALERT */
+  .alert { padding: 12px 16px; border-radius: 10px; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; margin-bottom: 16px; }
+  .alert-warning { background: rgba(255,107,53,0.1); border: 1px solid rgba(255,107,53,0.25); color: #ff9d6c; }
+  .alert-info { background: rgba(0,212,170,0.1); border: 1px solid rgba(0,212,170,0.2); color: var(--accent2); }
+  .alert-success { background: rgba(0,212,170,0.15); border: 1px solid rgba(0,212,170,0.3); color: var(--accent2); }
+  .alert-error { background: rgba(255,71,87,0.1); border: 1px solid rgba(255,71,87,0.25); color: var(--danger); }
+
+  /* PROGRESS */
+  .progress-bar-wrap { background: var(--surface2); border-radius: 100px; height: 6px; overflow: hidden; margin: 8px 0; }
+  .progress-bar { height: 100%; border-radius: 100px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width 0.3s; }
+
+  /* SCENES GRID */
+  .scenes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+  .scene-card {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; cursor: pointer; transition: all 0.2s; position: relative;
+  }
+  .scene-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .scene-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(108,71,255,0.3); }
+  .scene-img { width: 100%; aspect-ratio: 9/16; object-fit: cover; display: block; background: var(--surface); }
+  .scene-img.landscape { aspect-ratio: 16/9; }
+  .scene-img.square { aspect-ratio: 1; }
+  .scene-info { padding: 10px; }
+  .scene-title { font-size: 11px; font-weight: 600; font-family: 'Syne', sans-serif; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scene-status { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .scene-overlay { position: absolute; top: 6px; right: 6px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-pending { background: var(--muted); }
+  .status-generating { background: var(--accent); animation: pulse 1.2s infinite; }
+  .status-done { background: var(--accent2); }
+  .status-error { background: var(--danger); }
+
+  /* MODAL */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 28px; width: 100%; max-width: 500px; max-height: 90vh; overflow-y: auto; }
+  .modal-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 20px; margin-bottom: 6px; }
+  .modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .modal-close { float: right; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 20px; margin-top: -4px; }
+
+  /* API KEY LIST */
+  .key-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .key-item { display: flex; align-items: center; gap: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 13px; font-family: monospace; color: var(--text); }
+  .key-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .key-delete { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; flex-shrink: 0; opacity: 0.7; }
+  .key-delete:hover { opacity: 1; }
+
+  /* VIDEO PREVIEW */
+  .video-wrap { background: var(--surface2); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-top: 16px; }
+  .video-placeholder { aspect-ratio: 16/9; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); }
+  video { width: 100%; display: block; }
+
+  /* GENERATING OVERLAY ON CARD */
+  .generating-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); font-weight: 600; margin-top: 8px; }
+  .spin { animation: spin 1s linear infinite; display: inline-block; }
+
+  /* CAMERA EFFECTS */
+  .effects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .effect-btn {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface2);
+    color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'Syne', sans-serif;
+    transition: all 0.15s; text-align: center;
+  }
+  .effect-btn:hover { color: var(--text); border-color: var(--muted); }
+  .effect-btn.active { background: rgba(108,71,255,0.2); border-color: var(--accent); color: var(--text); }
+
+  /* BATCH IMAGE CARD */
+  .img-batch-item {
+    display: flex; align-items: center; gap: 12px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 8px;
+  }
+  .img-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--surface); flex-shrink: 0; }
+  .img-info { flex: 1; min-width: 0; }
+  .img-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .img-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .img-remove { background: none; border: none; color: var(--danger); cursor: pointer; opacity: 0.7; font-size: 16px; }
+
+  /* SECTION DIVIDER */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 4px 0 20px; }
+
+  /* CHIPS */
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; font-family: 'Syne', sans-serif; }
+  .chip-purple { background: rgba(108,71,255,0.2); color: var(--accent); }
+  .chip-teal { background: rgba(0,212,170,0.15); color: var(--accent2); }
+  .chip-orange { background: rgba(255,107,53,0.15); color: var(--accent3); }
+
+  /* RANGE */
+  input[type="range"] { -webkit-appearance: none; width: 100%; height: 4px; border-radius: 100px; background: var(--border); outline: none; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); cursor: pointer; box-shadow: 0 0 8px rgba(108,71,255,0.5); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  @keyframes slideIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  .anim-in { animation: slideIn 0.3s ease forwards; }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 100px; }
+
+  /* TIMER */
+  .timer-badge { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-family: monospace; color: var(--muted); }
+
+  /* SECTION TITLE */
+  .section-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; margin-top: 20px; }
+  .section-title:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── ICONS ─────────────────────────────────────────────────────────────────
+const Icon = ({ d, size=20 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d={d}/>
+  </svg>
+);
+const IScript = () => <Icon d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8"/>;
+const IBatch  = () => <Icon d="M4 6h16M4 10h16M4 14h8m-8 4h8M16 14l2 2 4-4"/>;
+const ICamera = () => <Icon d="M23 7l-7 5 7 5V7zM1 5h15a2 2 0 012 2v10a2 2 0 01-2 2H1a2 2 0 01-2-2V7a2 2 0 012-2z"/>;
+const ISettings=()=> <Icon d="M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>;
+const IUpload = () => <Icon d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>;
+const IPlay   = () => <Icon d="M5 3l14 9-14 9V3z"/>;
+const IPlus   = () => <Icon d="M12 5v14M5 12h14"/>;
+const ITrash  = () => <Icon d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>;
+const IStar   = () => <Icon d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>;
+const IZap    = () => <Icon d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>;
+const ICheck  = () => <Icon d="M20 6L9 17l-5-5"/>;
+
+// ─── TRANSLATIONS ──────────────────────────────────────────────────────────
+const T = {
+  es: {
+    appName: 'VideoAI Pro',
+    fromScript: 'Desde Guion',
+    batch: 'Por Lote / JSON',
+    imgToVideo: 'Imagen a Video',
+    settings: 'Ajustes',
+    settingsTitle: 'Configuración Multi-API',
+    settingsSub: 'Gestiona tus claves de API para generación de contenido.',
+    geminiAccel: '⚡ Acelerador Gemini (Multi-Key)',
+    geminiDesc: 'Añade múltiples API Keys para multiplicar la velocidad. La app alternará entre ellas automáticamente.',
+    noKeys: 'No hay claves configuradas.',
+    pasteKey: 'Pegar nueva API Key aquí...',
+    add: 'Añadir',
+    save: 'Guardar Configuración',
+    cancel: 'Cancelar',
+    apiWarning: 'Por favor, configura tus Claves de API en los ajustes (⚙️) para poder generar.',
+    shortMode: 'Modo Short (Reels)',
+    longMode: 'Modo Largo (YouTube)',
+    fullScript: '1. Guion Completo (Texto)',
+    scriptPlaceholder: 'Pega tu guion aquí. La IA dividirá el texto en escenas.',
+    masterAudio: '2. Audio Maestro (Para Sincronización)',
+    uploadAudio: 'Sube el audio completo (.mp3, .wav)',
+    masterPrompt: '3. Prompt Maestro',
+    aiInstructions: 'INSTRUCCIONES PARA LA IA',
+    promptPlaceholder: 'Describe de qué trata tu guion. Indica qué elementos visuales resaltar, qué evitar, etc.',
+    supportImages: 'IMÁGENES DE APOYO (OPCIONAL)',
+    uploadRefs: 'Subir referencias visuales',
+    imgsPerPara: '4. Imágenes por Párrafo',
+    aspectRatio: 'Relación de Aspecto de Imagen',
+    horizontal: 'Horizontal\n(16:9)',
+    vertical: 'Vertical\n(9:16)',
+    square: 'Cuadrado\n(1:1)',
+    createScenes: '✦ Crear Escenas',
+    yourProjects: 'Tus proyectos aparecerán aquí',
+    projectsHint: 'Usa la lista de prompts o la entrada JSON para empezar.',
+    promptList: 'Lista de Prompts',
+    jsonInput: 'Entrada JSON',
+    promptListLabel: 'Lista de Prompts (uno por línea)',
+    promptPlaceholderBatch: 'Un astronauta montando a caballo en Marte, estilo fotorrealista.\nUn bosque mágico de noche con setas brillantes.\nUn gato cyberpunk con gafas de neón en una ciudad lluviosa.',
+    pasteJSON: 'Pega tu array JSON aquí',
+    jsonPlaceholder: '[{"titulo": "un gato astronauta", "descripcion": "flotando en el espacio"}, ...]',
+    imgMotion: 'Movimiento de Cámara (Global)',
+    duration: 'Duración (s)',
+    format: 'Formato (Global)',
+    landscape: 'Landscape',
+    portrait: 'Portrait',
+    sqr: 'Square',
+    renderBatch: '🎬 Renderizar Lote',
+    renderVideo: '🎬 Renderizar Video',
+    cameraMotions: 'Movimientos de Cámara',
+    chromatic: 'Efectos Cromáticos',
+    singleImg: 'Imagen Individual',
+    batchProd: 'Producción en Lote',
+    dragImages: 'Arrastra imágenes o haz clic',
+    dragImage: 'Arrastra una imagen o haz clic',
+    formats: 'JPG, PNG, WebP',
+    generating: 'Generando...',
+    done: 'Completado',
+    scenes: 'escenas',
+    downloadAll: 'Descargar Todo',
+    preview: 'Previsualizar',
+    noApiKeys: '⚠️ Sin API Keys',
+    getGemini: 'Obtén tu API Key gratis en Google AI Studio',
+    hookMode: 'Modo: Short (Rápido)',
+    hookLabel: 'Hook (primeras 50 palabras):',
+    hookVal: '1 img cada 3-5s.',
+    bodyLabel: 'Cuerpo:',
+    bodyVal: '1 img cada 5-8s.',
+    autoIA: 'Auto (IA)',
+    newProject: 'Crear Nuevo Proyecto',
+    newProjectSub: 'Genera escenas a partir de una lista de prompts o un archivo JSON.',
+  },
+  en: {
+    appName: 'VideoAI Pro',
+    fromScript: 'From Script',
+    batch: 'Batch / JSON',
+    imgToVideo: 'Image to Video',
+    settings: 'Settings',
+    settingsTitle: 'Multi-API Configuration',
+    settingsSub: 'Manage your API keys for content generation.',
+    geminiAccel: '⚡ Gemini Accelerator (Multi-Key)',
+    geminiDesc: 'Add multiple API Keys to multiply generation speed. The app will rotate between them automatically.',
+    noKeys: 'No keys configured.',
+    pasteKey: 'Paste new API Key here...',
+    add: 'Add',
+    save: 'Save Configuration',
+    cancel: 'Cancel',
+    apiWarning: 'Please configure your API Keys in settings (⚙️) to enable generation.',
+    shortMode: 'Short Mode (Reels)',
+    longMode: 'Long Mode (YouTube)',
+    fullScript: '1. Full Script (Text)',
+    scriptPlaceholder: 'Paste your script here. AI will split the text into scenes.',
+    masterAudio: '2. Master Audio (For Sync)',
+    uploadAudio: 'Upload full audio (.mp3, .wav)',
+    masterPrompt: '3. Master Prompt',
+    aiInstructions: 'AI INSTRUCTIONS',
+    promptPlaceholder: 'Describe what your script is about. Indicate which visual elements to highlight, what to avoid, etc.',
+    supportImages: 'SUPPORT IMAGES (OPTIONAL)',
+    uploadRefs: 'Upload visual references',
+    imgsPerPara: '4. Images per Paragraph',
+    aspectRatio: 'Image Aspect Ratio',
+    horizontal: 'Horizontal\n(16:9)',
+    vertical: 'Vertical\n(9:16)',
+    square: 'Square\n(1:1)',
+    createScenes: '✦ Create Scenes',
+    yourProjects: 'Your projects will appear here',
+    projectsHint: 'Use the prompt list or JSON input to get started.',
+    promptList: 'Prompt List',
+    jsonInput: 'JSON Input',
+    promptListLabel: 'Prompt List (one per line)',
+    promptPlaceholderBatch: 'An astronaut riding a horse on Mars, photorealistic.\nA magical forest at night with glowing mushrooms.\nA cyberpunk cat with neon glasses in a rainy city.',
+    pasteJSON: 'Paste your JSON array here',
+    jsonPlaceholder: '[{"title": "an astronaut cat", "description": "floating in space"}, ...]',
+    imgMotion: 'Camera Movement (Global)',
+    duration: 'Duration (s)',
+    format: 'Format (Global)',
+    landscape: 'Landscape',
+    portrait: 'Portrait',
+    sqr: 'Square',
+    renderBatch: '🎬 Render Batch',
+    renderVideo: '🎬 Render Video',
+    cameraMotions: 'Camera Movements',
+    chromatic: 'Chromatic Effects',
+    singleImg: 'Single Image',
+    batchProd: 'Batch Production',
+    dragImages: 'Drag images or click',
+    dragImage: 'Drag an image or click',
+    formats: 'JPG, PNG, WebP',
+    generating: 'Generating...',
+    done: 'Completed',
+    scenes: 'scenes',
+    downloadAll: 'Download All',
+    preview: 'Preview',
+    noApiKeys: '⚠️ No API Keys',
+    getGemini: 'Get your free API Key at Google AI Studio',
+    hookMode: 'Mode: Short (Fast)',
+    hookLabel: 'Hook (first 50 words):',
+    hookVal: '1 img every 3-5s.',
+    bodyLabel: 'Body:',
+    bodyVal: '1 img every 5-8s.',
+    autoIA: 'Auto (AI)',
+    newProject: 'Create New Project',
+    newProjectSub: 'Generate scenes from a prompt list or a JSON file.',
+  }
+};
+
+// ─── CAMERA EFFECTS ────────────────────────────────────────────────────────
+const CAMERA_EFFECTS = {
+  es: {
+    'Movimientos de Cámara': ['Zoom (Acercamiento)','Zoom Inverso (Alejamiento)','Paneo Horizontal (Izq → Der)','Paneo Horizontal (Der → Izq)','Paneo Vertical (Arr → Abj)','Paneo Vertical (Abj → Arr)','Zoom + Paneo Diagonal','Rotación Suave','Temblor (Cámara en Mano)','Pulso (Latido)','Flotante','Respiración (Sutil)','Deriva Suave','Flotación de Nubes','Agua Sutil','Estático con Micro-Movimiento'],
+    'Efectos Cromáticos': ['Zoom con Aberración Cromática','Paneo con RGB Split','Pulso Glitch','Deriva RGB Suave','Onda Cromática','Distorsión Digital'],
+  },
+  en: {
+    'Camera Movements': ['Zoom In','Zoom Out','Horizontal Pan (L → R)','Horizontal Pan (R → L)','Vertical Pan (Up → Down)','Vertical Pan (Down → Up)','Zoom + Diagonal Pan','Smooth Rotation','Handheld Shake','Pulse (Heartbeat)','Float','Breathing (Subtle)','Soft Drift','Cloud Float','Subtle Water','Static with Micro-Motion'],
+    'Chromatic Effects': ['Zoom with Chromatic Aberration','Pan with RGB Split','Glitch Pulse','Soft RGB Drift','Chromatic Wave','Digital Distortion'],
+  }
+};
+
+// ─── STORAGE HELPERS ───────────────────────────────────────────────────────
+const storage = {
+  get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set: (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+// ─── GEMINI IMAGE GEN ──────────────────────────────────────────────────────
+async function generateImageGemini(prompt, apiKey, aspectRatio='1:1') {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1, aspectRatio }
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Gemini error');
+  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+  if (!b64) throw new Error('No image returned');
+  return `data:image/png;base64,${b64}`;
+}
+
+// ─── MAIN APP ──────────────────────────────────────────────────────────────
+function App() {
+  const [lang, setLang] = useState(storage.get('lang') || 'es');
+  const [tab, setTab] = useState('script'); // script | batch | imgvideo
+  const [showSettings, setShowSettings] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [apiKeys, setApiKeys] = useState(storage.get('apiKeys') || []);
+  const [newKey, setNewKey] = useState('');
+  const t = T[lang];
+
+  useEffect(() => { storage.set('lang', lang); }, [lang]);
+  useEffect(() => { storage.set('apiKeys', apiKeys); }, [apiKeys]);
+
+  const addKey = () => {
+    const keys = newKey.split('\n').map(k=>k.trim()).filter(Boolean);
+    if (!keys.length) return;
+    setApiKeys(prev => [...prev, ...keys]);
+    setNewKey('');
+  };
+  const removeKey = i => setApiKeys(prev => prev.filter((_,j)=>j!==i));
+
+  const hasKeys = apiKeys.length > 0;
+  const getKey = () => apiKeys[Math.floor(Math.random()*apiKeys.length)];
+
+  const navItems = [
+    { id:'script',   label: t.fromScript, icon: <IScript/> },
+    { id:'batch',    label: t.batch,      icon: <IBatch/> },
+    { id:'imgvideo', label: t.imgToVideo, icon: <ICamera/> },
+  ];
+
+  return (
+    <div className="app">
+      {/* SIDEBAR */}
+      <nav className={`sidebar ${sidebarOpen?'open':''}`}>
+        <div className="logo" onClick={()=>setSidebarOpen(p=>!p)}>
+          <svg viewBox="0 0 24 24"><path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+        </div>
+        <div className="nav-items">
+          {navItems.map(n=>(
+            <button key={n.id} className={`nav-item ${tab===n.id?'active':''}`} onClick={()=>{setTab(n.id);setSidebarOpen(false);}}>
+              <span className="nav-icon">{n.icon}</span>
+              <span className="nav-label">{n.label}</span>
+            </button>
+          ))}
+        </div>
+        <div className="user-pill" onClick={()=>setShowSettings(true)}>
+          <div className="avatar">V</div>
+          {sidebarOpen && <div className="user-info">
+            <div className="user-name">VideoAI Pro</div>
+            <div className="user-plan">{hasKeys ? `${apiKeys.length} key${apiKeys.length>1?'s':''} activa${apiKeys.length>1?'s':''}` : t.noApiKeys}</div>
+          </div>}
+        </div>
+      </nav>
+
+      {/* MAIN */}
+      <div className="main">
+        <div className="topbar">
+          <span className="page-title">{t.appName}</span>
+          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+            <div className="lang-toggle">
+              <button className={`lang-btn ${lang==='es'?'active':''}`} onClick={()=>setLang('es')}>ES</button>
+              <button className={`lang-btn ${lang==='en'?'active':''}`} onClick={()=>setLang('en')}>EN</button>
+            </div>
+            <button className="settings-btn" onClick={()=>setShowSettings(true)}><ISettings/></button>
+          </div>
+        </div>
+
+        <div className="content">
+          {!hasKeys && (
+            <div className="alert alert-warning">
+              <span>⚠️</span>
+              <div>{t.apiWarning} &nbsp;<a href="https://aistudio.google.com/app/apikey" target="_blank" style={{color:'inherit',fontWeight:700}}>{t.getGemini} →</a></div>
+            </div>
+          )}
+
+          {tab === 'script'   && <ScriptTab t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
+          {tab === 'batch'    && <BatchTab  t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
+          {tab === 'imgvideo' && <ImgVideoTab t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
+        </div>
+      </div>
+
+      {/* SETTINGS MODAL */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowSettings(false)}>
+          <div className="modal anim-in">
+            <button className="modal-close" onClick={()=>setShowSettings(false)}>×</button>
+            <div className="modal-title">{t.settingsTitle}</div>
+            <div className="modal-sub">{t.settingsSub}</div>
+
+            <div className="card-header"><IZap/><span className="card-title">{t.geminiAccel}</span></div>
+            <p style={{fontSize:13,color:'var(--muted)',marginBottom:14}}>{t.geminiDesc}</p>
+            <p style={{fontSize:12,color:'var(--muted)',marginBottom:8}}>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" style={{color:'var(--accent2)'}}>→ {t.getGemini}</a>
+            </p>
+
+            <div className="key-list">
+              {apiKeys.length===0 && <p style={{color:'var(--muted)',fontSize:13,padding:'10px 0'}}>{t.noKeys}</p>}
+              {apiKeys.map((k,i)=>(
+                <div className="key-item" key={i}>
+                  <span>{k.slice(0,8)}{'•'.repeat(20)}{k.slice(-4)}</span>
+                  <button className="key-delete" onClick={()=>removeKey(i)}>×</button>
+                </div>
+              ))}
+            </div>
+            <div className="row" style={{gap:8}}>
+              <input type="text" value={newKey} onChange={e=>setNewKey(e.target.value)} placeholder={t.pasteKey} style={{flex:1}} onKeyDown={e=>e.key==='Enter'&&addKey()}/>
+              <button className="btn-secondary" onClick={addKey} style={{whiteSpace:'nowrap'}}><IPlus/> {t.add}</button>
+            </div>
+            <p style={{fontSize:11,color:'var(--muted)',marginTop:6}}>Tip: Puedes pegar varias claves separadas por salto de línea.</p>
+
+            <div style={{display:'flex',gap:10,marginTop:24}}>
+              <button className="btn-secondary" onClick={()=>setShowSettings(false)}>{t.cancel}</button>
+              <button className="btn-primary" style={{margin:0,flex:1}} onClick={()=>setShowSettings(false)}><ICheck/> {t.save}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SCRIPT TAB ────────────────────────────────────────────────────────────
+function ScriptTab({ t, lang, hasKeys, getKey }) {
+  const [mode, setMode] = useState('short');
+  const [script, setScript] = useState('');
+  const [audioFile, setAudioFile] = useState(null);
+  const [masterPrompt, setMasterPrompt] = useState('');
+  const [refImages, setRefImages] = useState([]);
+  const [imgsPerPara, setImgsPerPara] = useState('auto');
+  const [aspect, setAspect] = useState('9:16');
+  const [scenes, setScenes] = useState([]);
+  const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const audioRef = useRef();
+  const refRef = useRef();
+
+  const createScenes = async () => {
+    if (!hasKeys || !script.trim()) return;
+    const paragraphs = script.split('\n').filter(p=>p.trim().length>10);
+    const count = imgsPerPara==='auto' ? Math.ceil(paragraphs.length*1.2) : paragraphs.length * parseInt(imgsPerPara);
+    const initial = paragraphs.slice(0, Math.min(count,12)).map((p,i)=>({id:i,title:p.slice(0,40),status:'pending',img:null}));
+    setScenes(initial);
+    setGenerating(true);
+    setProgress(0);
+    for (let i=0; i<initial.length; i++) {
+      try {
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
+        const prompt = `${masterPrompt ? masterPrompt+'. ' : ''}${initial[i].title}. Cinematic, high quality, ${aspect==='9:16'?'vertical portrait':'aspect ratio '+aspect}`;
+        const img = await generateImageGemini(prompt, getKey(), aspect);
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
+      } catch(e) {
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'error'}:s));
+      }
+      setProgress(Math.round(((i+1)/initial.length)*100));
+    }
+    setGenerating(false);
+  };
+
+  return (
+    <div className="anim-in">
+      <div className="mode-tabs">
+        <button className={`mode-tab ${mode==='short'?'active':''}`} onClick={()=>setMode('short')}>📱 {t.shortMode}</button>
+        <button className={`mode-tab ${mode==='long'?'active':''}`} onClick={()=>setMode('long')}>🎬 {t.longMode}</button>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-num">1</div><span className="card-title">{t.fullScript}</span></div>
+        <textarea rows={5} placeholder={t.scriptPlaceholder} value={script} onChange={e=>setScript(e.target.value)}/>
+      </div>
+
+      <div className="card" style={{borderColor:'rgba(108,71,255,0.3)'}}>
+        <div className="card-header"><div className="card-num">2</div><span className="card-title">{t.masterAudio}</span></div>
+        <input type="file" ref={audioRef} accept=".mp3,.wav" onChange={e=>setAudioFile(e.target.files[0])}/>
+        <div className="upload-zone" onClick={()=>audioRef.current.click()}>
+          <IUpload/>
+          <p>{audioFile ? audioFile.name : t.uploadAudio}</p>
+          {!audioFile && <span>.mp3, .wav</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-num">3</div><span className="card-title">{t.masterPrompt}</span></div>
+        <label>{t.aiInstructions}</label>
+        <textarea rows={3} placeholder={t.promptPlaceholder} value={masterPrompt} onChange={e=>setMasterPrompt(e.target.value)}/>
+        <label style={{marginTop:14}}>{t.supportImages}</label>
+        <input type="file" ref={refRef} accept="image/*" multiple onChange={e=>setRefImages(Array.from(e.target.files))}/>
+        <div className="upload-zone" style={{padding:'16px'}} onClick={()=>refRef.current.click()}>
+          <p>⬆ {t.uploadRefs}</p>
+          {refImages.length>0 && <span>{refImages.length} archivo(s)</span>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header"><div className="card-num">4</div><span className="card-title">{t.imgsPerPara}</span></div>
+        <div className="segment">
+          {['1','2','3','auto'].map(v=>(
+            <button key={v} className={`seg-btn ${imgsPerPara===v?'active':''}`} onClick={()=>setImgsPerPara(v)}>
+              {v==='auto'?t.autoIA:v}
+            </button>
+          ))}
+        </div>
+        {imgsPerPara==='auto' && (
+          <div style={{marginTop:12,background:'rgba(108,71,255,0.1)',border:'1px solid rgba(108,71,255,0.2)',borderRadius:10,padding:'10px 14px',fontSize:12}}>
+            <strong>{t.hookMode}</strong><br/>
+            <span style={{color:'var(--muted)'}}>{t.hookLabel} {t.hookVal}<br/>{t.bodyLabel} {t.bodyVal}</span>
+          </div>
+        )}
+        <div style={{marginTop:16}}>
+          <label>{t.aspectRatio}</label>
+          <div className="segment">
+            {[['16:9',t.horizontal.replace('\n',' ')],['9:16',t.vertical.replace('\n',' ')],['1:1',t.square.replace('\n',' ')]].map(([v,l])=>(
+              <button key={v} className={`seg-btn ${aspect===v?'active':''}`} onClick={()=>setAspect(v)}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {generating && (
+        <div className="card">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span className="generating-label"><span className="spin">⟳</span> {t.generating}</span>
+            <span className="timer-badge">{progress}%</span>
+          </div>
+          <div className="progress-bar-wrap"><div className="progress-bar" style={{width:progress+'%'}}/></div>
+        </div>
+      )}
+
+      <button className="btn-primary" disabled={!hasKeys||!script.trim()||generating} onClick={createScenes}>
+        <IStar/> {t.createScenes}
+      </button>
+
+      {scenes.length>0 && <ScenesGrid scenes={scenes} aspect={aspect}/>}
+    </div>
+  );
+}
+
+// ─── BATCH TAB ─────────────────────────────────────────────────────────────
+function BatchTab({ t, lang, hasKeys, getKey }) {
+  const [inputMode, setInputMode] = useState('list');
+  const [promptList, setPromptList] = useState('');
+  const [jsonInput, setJsonInput] = useState('');
+  const [aspect, setAspect] = useState('9:16');
+  const [scenes, setScenes] = useState([]);
+  const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const getPrompts = () => {
+    if (inputMode==='list') return promptList.split('\n').filter(p=>p.trim());
+    try {
+      const arr = JSON.parse(jsonInput);
+      return arr.map(o=>typeof o==='string'?o:(o.titulo||o.title||o.descripcion||o.description||JSON.stringify(o)));
+    } catch { return []; }
+  };
+
+  const createScenes = async () => {
+    const prompts = getPrompts();
+    if (!hasKeys || !prompts.length) return;
+    const initial = prompts.map((p,i)=>({id:i,title:p.slice(0,50),status:'pending',img:null}));
+    setScenes(initial); setGenerating(true); setProgress(0);
+    for (let i=0;i<initial.length;i++) {
+      try {
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
+        const img = await generateImageGemini(initial[i].title+`. High quality cinematic image, aspect ${aspect}`, getKey(), aspect);
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
+      } catch {
+        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'error'}:s));
+      }
+      setProgress(Math.round(((i+1)/initial.length)*100));
+    }
+    setGenerating(false);
+  };
+
+  return (
+    <div className="anim-in">
+      <div className="card-header" style={{marginBottom:16}}>
+        <h2 style={{fontFamily:'Syne',fontWeight:800,fontSize:22}}>{t.newProject}</h2>
+      </div>
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:24}}>{t.newProjectSub}</p>
+
+      <div className="mode-tabs" style={{marginBottom:20}}>
+        <button className={`mode-tab ${inputMode==='list'?'active':''}`} onClick={()=>setInputMode('list')}>☰ {t.promptList}</button>
+        <button className={`mode-tab ${inputMode==='json'?'active':''}`} onClick={()=>setInputMode('json')}>⌥ {t.jsonInput}</button>
+      </div>
+
+      <div className="card">
+        {inputMode==='list' ? (
+          <>
+            <label>{t.promptListLabel}</label>
+            <textarea rows={7} placeholder={t.promptPlaceholderBatch} value={promptList} onChange={e=>setPromptList(e.target.value)}/>
+          </>
+        ) : (
+          <>
+            <label>{t.pasteJSON}</label>
+            <textarea rows={7} placeholder={t.jsonPlaceholder} value={jsonInput} onChange={e=>setJsonInput(e.target.value)} style={{fontFamily:'monospace',fontSize:12}}/>
+          </>
+        )}
+      </div>
+
+      <div className="card">
+        <label>{t.aspectRatio}</label>
+        <div className="segment">
+          {[['16:9',t.horizontal.replace('\n',' ')],['9:16',t.vertical.replace('\n',' ')],['1:1',t.square.replace('\n',' ')]].map(([v,l])=>(
+            <button key={v} className={`seg-btn ${aspect===v?'active':''}`} onClick={()=>setAspect(v)}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {generating && (
+        <div className="card">
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+            <span className="generating-label"><span className="spin">⟳</span> {t.generating}</span>
+            <span className="timer-badge">{progress}%</span>
+          </div>
+          <div className="progress-bar-wrap"><div className="progress-bar" style={{width:progress+'%'}}/></div>
+        </div>
+      )}
+
+      <button className="btn-primary" disabled={!hasKeys||generating||!getPrompts().length} onClick={createScenes}>
+        <IStar/> {t.createScenes} {getPrompts().length>0?`(${getPrompts().length})`:''}
+      </button>
+
+      {scenes.length===0 && !generating && (
+        <div style={{textAlign:'center',padding:'40px 0',color:'var(--muted)'}}>
+          <IStar/><div style={{marginTop:12,fontFamily:'Syne',fontWeight:700,fontSize:16}}>{t.yourProjects}</div>
+          <p style={{fontSize:13,marginTop:6}}>{t.projectsHint}</p>
+        </div>
+      )}
+      {scenes.length>0 && <ScenesGrid scenes={scenes} aspect={aspect}/>}
+    </div>
+  );
+}
+
+// ─── IMAGE TO VIDEO TAB ────────────────────────────────────────────────────
+function ImgVideoTab({ t, lang, hasKeys, getKey }) {
+  const [subMode, setSubMode] = useState('single');
+  const [selectedEffect, setSelectedEffect] = useState('Zoom (Acercamiento)');
+  const [duration, setDuration] = useState(4);
+  const [format, setFormat] = useState('Landscape');
+  const [images, setImages] = useState([]);
+  const [rendering, setRendering] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState([]);
+  const fileRef = useRef();
+
+  const effects = CAMERA_EFFECTS[lang==='es'?'es':'en'];
+
+  const handleFiles = e => {
+    const files = Array.from(e.target.files);
+    const newImgs = files.map(f=>({file:f, name:f.name, url:URL.createObjectURL(f), id:Date.now()+Math.random()}));
+    if (subMode==='single') setImages(newImgs.slice(0,1));
+    else setImages(prev=>[...prev,...newImgs]);
+  };
+
+  const render = async () => {
+    if (!images.length) return;
+    setRendering(true); setProgress(0); setResults([]);
+    for (let i=0;i<images.length;i++) {
+      await new Promise(r=>setTimeout(r,1200));
+      setProgress(Math.round(((i+1)/images.length)*100));
+      setResults(prev=>[...prev,{id:i,url:images[i].url,name:images[i].name,effect:selectedEffect}]);
+    }
+    setRendering(false);
+  };
+
+  return (
+    <div className="anim-in">
+      <div className="mode-tabs">
+        <button className={`mode-tab ${subMode==='single'?'active':''}`} onClick={()=>{setSubMode('single');setImages([]);}}>🖼 {t.singleImg}</button>
+        <button className={`mode-tab ${subMode==='batch'?'active':''}`} onClick={()=>{setSubMode('batch');setImages([]);}}>📦 {t.batchProd}</button>
+      </div>
+
+      <p style={{color:'var(--muted)',fontSize:13,marginBottom:16}}>
+        Crea animaciones de cámara y efectos de aberración cromática.
+      </p>
+
+      <input type="file" ref={fileRef} accept="image/*" multiple={subMode==='batch'} onChange={handleFiles}/>
+      <div className="upload-zone" onClick={()=>fileRef.current.click()} style={{marginBottom:16}}>
+        <IUpload/>
+        <p>{subMode==='batch'?t.dragImages:t.dragImage}</p>
+        <span>{t.formats}</span>
+      </div>
+
+      {images.length>0 && (
+        <div style={{marginBottom:16}}>
+          {images.map((img,i)=>(
+            <div className="img-batch-item" key={img.id}>
+              <img className="img-thumb" src={img.url} alt={img.name}/>
+              <div className="img-info"><div className="img-name">{img.name}</div><div className="img-meta">{selectedEffect}</div></div>
+              <button className="img-remove" onClick={()=>setImages(prev=>prev.filter((_,j)=>j!==i))}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card">
+        <label>{t.imgMotion}</label>
+        {Object.entries(effects).map(([group, items])=>(
+          <div key={group}>
+            <div className="section-title">{group}</div>
+            <div className="effects-grid">
+              {items.map(e=>(
+                <button key={e} className={`effect-btn ${selectedEffect===e?'active':''}`} onClick={()=>setSelectedEffect(e)}>{e}</button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid-2" style={{marginBottom:16}}>
+        <div>
+          <label>{t.duration}</label>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <input type="range" min={1} max={10} value={duration} onChange={e=>setDuration(+e.target.value)} style={{flex:1}}/>
+            <span style={{fontWeight:700,fontFamily:'Syne',fontSize:15,color:'var(--accent)',minWidth:24}}>{duration}s</span>
+          </div>
+        </div>
+        <div>
+          <label>{t.format}</label>
+          <select value={format} onChange={e=>setFormat(e.target.value)}>
+            <option>Landscape</option>
+            <option>Portrait</option>
+            <option>Square</option>
+          </select>
+        </div>
+      </div>
+
+      {rendering && (
+        <div className="card">
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+            <span className="generating-label"><span className="spin">⟳</span> {t.generating}</span>
+            <span className="timer-badge">{progress}%</span>
+          </div>
+          <div className="progress-bar-wrap"><div className="progress-bar" style={{width:progress+'%'}}/></div>
+        </div>
+      )}
+
+      <button className="btn-primary" disabled={!images.length||rendering} onClick={render}>
+        <IPlay/> {subMode==='batch'?`${t.renderBatch} (${images.length})`:t.renderVideo}
+      </button>
+
+      {results.length>0 && (
+        <div style={{marginTop:20}}>
+          <div className="section-title">{t.done} — {results.length} {t.scenes}</div>
+          <div className="scenes-grid">
+            {results.map(r=>(
+              <div className="scene-card done" key={r.id}>
+                <img className={`scene-img ${format==='Landscape'?'landscape':format==='Square'?'square':''}`} src={r.url} alt={r.name}/>
+                <div className="scene-info">
+                  <div className="scene-title">{r.name}</div>
+                  <div className="scene-status">{r.effect}</div>
+                </div>
+                <div className="scene-overlay"><div className="status-dot status-done"/></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SCENES GRID ───────────────────────────────────────────────────────────
+function ScenesGrid({ scenes, aspect }) {
+  const cls = aspect==='16:9'?'landscape':aspect==='1:1'?'square':'';
+  const done = scenes.filter(s=>s.status==='done').length;
+  return (
+    <div style={{marginTop:20}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <span className="section-title" style={{margin:0}}>{done}/{scenes.length} escenas</span>
+        {done>0 && <button className="btn-secondary" style={{padding:'6px 14px',fontSize:12}}>⬇ Descargar Todo</button>}
+      </div>
+      <div className="scenes-grid">
+        {scenes.map(s=>(
+          <div className={`scene-card ${s.status==='done'?'selected':''}`} key={s.id}>
+            {s.img
+              ? <img className={`scene-img ${cls}`} src={s.img} alt={s.title}/>
+              : <div className={`scene-img ${cls}`} style={{display:'flex',alignItems:'center',justifyContent:'center',color:'var(--muted)',fontSize:22}}>
+                  {s.status==='generating'?<span className="spin">⟳</span>:s.status==='error'?'✕':'○'}
+                </div>
+            }
+            <div className="scene-info">
+              <div className="scene-title">{s.title}</div>
+              <div className="scene-status">{s.status}</div>
+            </div>
+            <div className="scene-overlay">
+              <div className={`status-dot status-${s.status}`}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── RENDER ────────────────────────────────────────────────────────────────
+ReactDOM.render(<App/>, document.getElementById('root'));
+</script>
+</body>
+</html>

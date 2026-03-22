@@ -1,7 +1,7 @@
 // api/generate.js - Vercel Serverless Function
 // Proxies requests to Whisk and Gemini to avoid CORS issues
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // Allow CORS from your app
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');

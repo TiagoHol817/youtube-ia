@@ -531,24 +531,28 @@ async function expandPromptWithGemini(rawPrompt, style, apiKey) {
   } catch(e) { return rawPrompt; }
 }
 
-// STEP 2a: Generate with Gemini imagen
-async function tryGeminiImage(prompt, apiKey) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
-      })
-    }
-  );
-  if (!res.ok) throw new Error('Gemini image failed: ' + res.status);
+// STEP 2a: Generate with Google Whisk (Bearer token, renews daily)
+async function tryWhisk(prompt, aspectRatio, whiskToken) {
+  if (!whiskToken) throw new Error('No Whisk token');
+  const aspectMap = { '16:9': 'IMAGE_ASPECT_RATIO_LANDSCAPE', '9:16': 'IMAGE_ASPECT_RATIO_PORTRAIT', '1:1': 'IMAGE_ASPECT_RATIO_SQUARE' };
+  const res = await fetch('https://labs.google/fx/api/v1/images:generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${whiskToken}`
+    },
+    body: JSON.stringify({
+      prompt: prompt,
+      aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
+      modelId: 'imagen-3.0-generate-002',
+      outputOptions: { mimeType: 'image/jpeg', compressionQuality: 90 }
+    })
+  });
+  if (!res.ok) throw new Error('Whisk failed: ' + res.status);
   const data = await res.json();
-  const imgPart = (data.candidates?.[0]?.content?.parts || []).find(p => p.inlineData);
-  if (!imgPart) throw new Error('No image in response');
-  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+  const b64 = data.images?.[0]?.bytesBase64Encoded || data.predictions?.[0]?.bytesBase64Encoded;
+  if (!b64) throw new Error('No image from Whisk');
+  return `data:image/jpeg;base64,${b64}`;
 }
 
 // STEP 2b: Pollinations fallback (free, no key)
@@ -565,21 +569,22 @@ async function tryPollinations(prompt, aspectRatio) {
       if (res.ok) return await blobToBase64(await res.blob());
     } catch(e) { /* try next */ }
   }
-  throw new Error('All providers failed');
+  throw new Error('Pollinations also failed');
 }
 
-// MAIN: expand prompt then generate image
-async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style) {
-  // 1. Expand the prompt with AI (mimics course app behavior)
+// MAIN: expand prompt with Gemini, generate image with Whisk
+async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style, whiskToken) {
+  // 1. Expand prompt with Gemini text (free, works great)
   const expandedPrompt = await expandPromptWithGemini(rawPrompt, style, apiKey);
   console.log('Expanded prompt:', expandedPrompt);
 
-  // 2. Generate image
-  if (apiKey) {
-    try { return await tryGeminiImage(expandedPrompt, apiKey); }
-    catch(e) { console.warn('Gemini image error:', e.message); }
+  // 2. Try Whisk first (best quality - Imagen 3)
+  if (whiskToken) {
+    try { return await tryWhisk(expandedPrompt, aspectRatio, whiskToken); }
+    catch(e) { console.warn('Whisk error:', e.message); }
   }
-  // 3. Fallback to Pollinations
+
+  // 3. Fallback: Pollinations
   return await tryPollinations(expandedPrompt, aspectRatio);
 }
 
@@ -591,11 +596,22 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [apiKeys, setApiKeys] = useState(storage.get('apiKeys') || []);
   const [newKey, setNewKey] = useState('');
+  const [whiskTokens, setWhiskTokens] = useState(storage.get('whiskTokens') || []);
+  const [newWhisk, setNewWhisk] = useState('');
   const t = T[lang];
 
   useEffect(() => { storage.set('lang', lang); }, [lang]);
   useEffect(() => { storage.set('apiKeys', apiKeys); }, [apiKeys]);
+  useEffect(() => { storage.set('whiskTokens', whiskTokens); }, [whiskTokens]);
 
+  const addWhisk = () => {
+    const tokens = newWhisk.split('\n').map(k=>k.trim()).filter(Boolean);
+    if (!tokens.length) return;
+    setWhiskTokens(prev => [...prev, ...tokens]);
+    setNewWhisk('');
+  };
+  const removeWhisk = i => setWhiskTokens(prev => prev.filter((_,j)=>j!==i));
+  const getWhisk = () => whiskTokens.length ? whiskTokens[Math.floor(Math.random()*whiskTokens.length)] : null;
   const addKey = () => {
     const keys = newKey.split('\n').map(k=>k.trim()).filter(Boolean);
     if (!keys.length) return;
@@ -658,8 +674,8 @@ function App() {
             </div>
           )}
 
-          {tab === 'script'   && <ScriptTab t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
-          {tab === 'batch'    && <BatchTab  t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
+          {tab === 'script'   && <ScriptTab t={t} lang={lang} hasKeys={hasKeys} getKey={getKey} getWhisk={getWhisk} hasWhisk={whiskTokens.length>0}/>}
+          {tab === 'batch'    && <BatchTab  t={t} lang={lang} hasKeys={hasKeys} getKey={getKey} getWhisk={getWhisk} hasWhisk={whiskTokens.length>0}/>}
           {tab === 'imgvideo' && <ImgVideoTab t={t} lang={lang} hasKeys={hasKeys} getKey={getKey}/>}
         </div>
       </div>
@@ -693,6 +709,23 @@ function App() {
             </div>
             <p style={{fontSize:11,color:'var(--muted)',marginTop:6}}>Tip: Puedes pegar varias claves separadas por salto de línea.</p>
 
+            <hr className="divider"/>
+            <div className="card-header" style={{marginTop:16}}><span style={{fontSize:20}}>🎨</span><span className="card-title">Tokens de Imagen (Whisk)</span></div>
+            <p style={{fontSize:13,color:'var(--muted)',marginBottom:8}}>Token diario de Google Whisk — genera imágenes con Imagen 3 (calidad máxima).</p>
+            <p style={{fontSize:12,marginBottom:12}}><a href="https://labs.google/fx/tools/whisk" target="_blank" style={{color:'var(--accent2)'}}>→ Obtén tu token con la extensión Whisk Token Extractor</a></p>
+            <div className="key-list">
+              {whiskTokens.length===0 && <p style={{color:'var(--muted)',fontSize:13,padding:'8px 0'}}>Sin tokens. Se usará Pollinations como fallback.</p>}
+              {whiskTokens.map((k,i)=>(
+                <div className="key-item" key={i}>
+                  <span>ya29.{'•'.repeat(18)}{k.slice(-6)}</span>
+                  <button className="key-delete" onClick={()=>removeWhisk(i)}>×</button>
+                </div>
+              ))}
+            </div>
+            <div className="row" style={{gap:8}}>
+              <input type="text" value={newWhisk} onChange={e=>setNewWhisk(e.target.value)} placeholder="Pegar Bearer token aquí (ya29.a0A...)" style={{flex:1}} onKeyDown={e=>e.key==='Enter'&&addWhisk()}/>
+              <button className="btn-secondary" onClick={addWhisk} style={{whiteSpace:'nowrap'}}><IPlus/> Añadir</button>
+            </div>
             <div style={{display:'flex',gap:10,marginTop:24}}>
               <button className="btn-secondary" onClick={()=>setShowSettings(false)}>{t.cancel}</button>
               <button className="btn-primary" style={{margin:0,flex:1}} onClick={()=>setShowSettings(false)}><ICheck/> {t.save}</button>
@@ -705,7 +738,7 @@ function App() {
 }
 
 // ─── SCRIPT TAB ────────────────────────────────────────────────────────────
-function ScriptTab({ t, lang, hasKeys, getKey }) {
+function ScriptTab({ t, lang, hasKeys, getKey, getWhisk, hasWhisk }) {
   const [mode, setMode] = useState('short');
   const [script, setScript] = useState('');
   const [audioFile, setAudioFile] = useState(null);
@@ -733,7 +766,7 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
       try {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
         const prompt = `${masterPrompt ? masterPrompt+'. ' : ''}${initial[i].title}. Cinematic, high quality, ${aspect==='9:16'?'vertical portrait':'aspect ratio '+aspect}`;
-        const img = await generateImageGemini(prompt, getKey(), aspect, visualStyle);
+        const img = await generateImageGemini(prompt, getKey(), aspect, visualStyle, getWhisk());
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
         if (i < initial.length - 1) await sleep(2000);
       } catch(e) {
@@ -840,7 +873,7 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
 }
 
 // ─── BATCH TAB ─────────────────────────────────────────────────────────────
-function BatchTab({ t, lang, hasKeys, getKey }) {
+function BatchTab({ t, lang, hasKeys, getKey, getWhisk, hasWhisk }) {
   const [inputMode, setInputMode] = useState('list');
   const [promptList, setPromptList] = useState('');
   const [jsonInput, setJsonInput] = useState('');
@@ -865,7 +898,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
     for (let i=0;i<initial.length;i++) {
       try {
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
-        const img = await generateImageGemini(initial[i].title+`. High quality cinematic image, aspect ${aspect}`, getKey(), aspect);
+        const img = await generateImageGemini(initial[i].title, getKey(), aspect, '', getWhisk());
         setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
         if (i < initial.length - 1) await sleep(2000);
       } catch {

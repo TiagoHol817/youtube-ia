@@ -492,23 +492,22 @@ const storage = {
   set: (k,v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 
-// ─── GEMINI IMAGE GEN ──────────────────────────────────────────────────────
-async function generateImageGemini(prompt, apiKey, aspectRatio='1:1') {
-  // Use gemini-2.0-flash-preview-image-generation (free tier)
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt + '. High quality, cinematic, detailed.' }] }],
-      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
-    })
+// ─── IMAGE GENERATION (Pollinations AI - gratis, sin API key) ─────────────
+async function generateImageGemini(prompt, apiKey, aspectRatio) {
+  const w = aspectRatio === "16:9" ? 1280 : aspectRatio === "9:16" ? 720 : 1024;
+  const h = aspectRatio === "16:9" ? 720  : aspectRatio === "9:16" ? 1280 : 1024;
+  const encoded = encodeURIComponent(prompt + ", cinematic, high quality, detailed, 4k");
+  const seed = Math.floor(Math.random()*99999);
+  const url = `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&nologo=true&seed=${seed}&model=flux`;
+  const imgRes = await fetch(url);
+  if (!imgRes.ok) throw new Error("Image generation failed");
+  const blob = await imgRes.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'Gemini error');
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  const imgPart = parts.find(p => p.inlineData);
-  if (!imgPart) throw new Error('No image returned');
-  return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
 }
 
 // ─── MAIN APP ──────────────────────────────────────────────────────────────
@@ -648,7 +647,7 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
   const refRef = useRef();
 
   const createScenes = async () => {
-    if (!hasKeys || !script.trim()) return;
+    if (!script.trim()) return;
     const paragraphs = script.split('\n').filter(p=>p.trim().length>10);
     const count = imgsPerPara==='auto' ? Math.ceil(paragraphs.length*1.2) : paragraphs.length * parseInt(imgsPerPara);
     const initial = paragraphs.slice(0, Math.min(count,12)).map((p,i)=>({id:i,title:p.slice(0,40),status:'pending',img:null}));
@@ -738,7 +737,7 @@ function ScriptTab({ t, lang, hasKeys, getKey }) {
         </div>
       )}
 
-      <button className="btn-primary" disabled={!hasKeys||!script.trim()||generating} onClick={createScenes}>
+      <button className="btn-primary" disabled={!script.trim()||generating} onClick={createScenes}>
         <IStar/> {t.createScenes}
       </button>
 
@@ -767,7 +766,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
 
   const createScenes = async () => {
     const prompts = getPrompts();
-    if (!hasKeys || !prompts.length) return;
+    if (!prompts.length) return;
     const initial = prompts.map((p,i)=>({id:i,title:p.slice(0,50),status:'pending',img:null}));
     setScenes(initial); setGenerating(true); setProgress(0);
     for (let i=0;i<initial.length;i++) {
@@ -828,7 +827,7 @@ function BatchTab({ t, lang, hasKeys, getKey }) {
         </div>
       )}
 
-      <button className="btn-primary" disabled={!hasKeys||generating||!getPrompts().length} onClick={createScenes}>
+      <button className="btn-primary" disabled={generating||!getPrompts().length} onClick={createScenes}>
         <IStar/> {t.createScenes} {getPrompts().length>0?`(${getPrompts().length})`:''}
       </button>
 
@@ -1005,11 +1004,6 @@ function ScenesGrid({ scenes, aspect }) {
   );
 }
 
-// ─── RENDER ────────────────────────────────────────────────────────────────
-ReactDOM.render(<App/>, document.getElementById('root'));
-</script>
-</body>
-</html>
 // ─── RENDER ────────────────────────────────────────────────────────────────
 ReactDOM.render(<App/>, document.getElementById('root'));
 </script>

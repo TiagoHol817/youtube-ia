@@ -504,89 +504,205 @@ async function blobToBase64(blob) {
   });
 }
 
-// STEP 1: Expand prompt using Gemini text (like the course app does)
+// STEP 1: Generate visual scene prompts using EXACT same method as course app
 async function expandPromptWithGemini(rawPrompt, style, apiKey) {
   if (!apiKey) return rawPrompt;
   try {
-    const styleNote = style ? `Visual style: ${style}.` : '';
+    const visualStyle = style && style !== 'Auto (IA)'
+      ? style
+      : 'Cinematic photorealistic style, dramatic lighting, high detail, 8K quality';
+
+    const systemPrompt = `
+    ROLE: Expert Film Director & Forensic Image Analyst.
+    
+    TASK: Convert this script narration into a detailed visual scene prompt.
+
+    FULL SCRIPT CONTEXT:
+    """
+    ${rawPrompt}
+    """
+    
+    **VISUAL STYLE:** "${visualStyle}". Use this specific style.
+
+    **DYNAMIC ACTION PROTOCOL (CRITICAL):**
+    - VISUALIZE THE VERB: The visual prompt MUST represent the exact action described.
+    - NO STATIC POSES: Capture motion, emotion and narrative dynamically.
+    - ACTING: Characters and environment must "act out" the script.
+
+    RULES:
+    1. CINEMATOGRAPHY: Prioritize Close-up or Extreme Close-up shots unless scene demands wide view.
+    2. ENGLISH OUTPUT: Visual prompt must be in English.
+    3. MAX 150 words.
+    4. Return ONLY the image prompt, no explanations.
+    `;
+
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text:
-            `You are a cinematic image prompt writer. Convert this script narration into a vivid, detailed image generation prompt in English. ${styleNote}
-            Keep it under 200 words. Focus on: visual composition, lighting, atmosphere, colors, camera angle.
-            Script: "${rawPrompt}"
-            Respond with ONLY the image prompt, nothing else.`
-          }]}]
+          contents: [{ parts: [{ text: systemPrompt }], role: 'user' }],
+          generationConfig: { temperature: 1, topP: 0.95 }
         })
       }
     );
-    if (!res.ok) return rawPrompt;
+    if (!res.ok) {
+      // fallback to gemini-2.0-flash
+      const res2 = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: systemPrompt }], role: 'user' }]
+          })
+        }
+      );
+      if (!res2.ok) return rawPrompt + ', ' + visualStyle;
+      const d2 = await res2.json();
+      return d2.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || rawPrompt;
+    }
     const data = await res.json();
     const expanded = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    console.log('Visual prompt generated:', expanded?.slice(0,80) + '...');
     return expanded || rawPrompt;
-  } catch(e) { return rawPrompt; }
+  } catch(e) {
+    console.warn('Prompt expansion failed:', e.message);
+    return rawPrompt;
+  }
 }
 
-// STEP 2a: Generate with Google Whisk (Bearer token, renews daily)
-async function tryWhisk(prompt, aspectRatio, whiskToken) {
-  if (!whiskToken) throw new Error('No Whisk token');
-  const aspectMap = {
-    '16:9': 'IMAGE_ASPECT_RATIO_LANDSCAPE',
-    '9:16': 'IMAGE_ASPECT_RATIO_PORTRAIT',
-    '1:1':  'IMAGE_ASPECT_RATIO_SQUARE'
-  };
-  // Try multiple known Whisk endpoints
-  const endpoints = [
-    {
-      url: 'https://labs.google/fx/api/v1/whisk:run',
-      body: {
-        imagePrompt: { parts: [{ text: prompt }] },
-        imageStyle: { parts: [{ text: '' }] },
-        generateImageConfig: {
-          aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
-          numberOfImages: 1
-        }
-      }
-    },
-    {
-      url: 'https://aisandbox-pa.googleapis.com/v1:whisk',
-      body: {
-        imagePrompt: { parts: [{ text: prompt }] },
-        imageStyle: { parts: [{ text: '' }] },
-        generateImageConfig: {
-          aspectRatio: aspectMap[aspectRatio] || 'IMAGE_ASPECT_RATIO_PORTRAIT',
-          numberOfImages: 1
-        }
-      }
-    }
-  ];
+// Generate scenes JSON (batch mode - exactly like course app)
+async function generateScenesFromScript(script, style, imgsPerPara, apiKey) {
+  if (!apiKey) return null;
+  try {
+    const visualStyle = style && style !== 'Auto (IA)'
+      ? style
+      : 'Cinematic photorealistic style, dramatic lighting, high detail';
 
-  for (const ep of endpoints) {
-    try {
-      const res = await fetch(ep.url, {
+    const paragraphs = script.split('\n').filter(p => p.trim().length > 5);
+    const scenesPerPara = imgsPerPara === 'auto' ? 1 : parseInt(imgsPerPara);
+
+    const inputBatch = paragraphs.map((p, i) =>
+      `PARAGRAPH_ID_${i} [REQUIRED_SCENES: ${scenesPerPara}]:\n"${p}"`
+    ).join('\n\n');
+
+    const promptText = `
+    ROLE: Expert Film Director & Forensic Image Analyst.
+    
+    TASK: Split the provided text paragraphs into detailed visual scene prompts strictly following the requested scene counts.
+
+    FULL SCRIPT CONTEXT (READ FIRST for Character Consistency):
+    """
+    ${script}
+    """
+    
+    **VISUAL STYLE:** "${visualStyle}". Use this specific style.
+
+    INPUT BATCH (Do NOT Skip Any Text):
+    ---
+    ${inputBatch}
+    ---
+
+    **VISUAL CONSISTENCY:** Ensure all scenes look like they belong to the same project. Start prompts with the style definition.
+
+    **DYNAMIC ACTION PROTOCOL (CRITICAL):**
+    - VISUALIZE THE VERB: The visual prompt MUST represent the exact action described in the text segment.
+    - NO STATIC POSES: If text says "swimming", character must be actively swimming.
+    - ACTING: Characters and environment must "act out" the script. Capture emotion dynamically.
+
+    CRITICAL RULES:
+    1. MATHEMATICAL OBEDIENCE: You see "[REQUIRED_SCENES: X]". Generate EXACTLY X scenes per paragraph.
+    2. ZERO DATA LOSS: "script_segment" fields MUST combine to equal the EXACT original paragraph text.
+    3. SEQUENTIAL: Scenes must cover paragraph from start to finish.
+    4. CINEMATOGRAPHY: Prioritize Close-up shots unless scene demands wide view.
+    5. ENGLISH OUTPUT: Visual prompts must be in English.
+
+    OUTPUT: Return JSON array only.
+    `;
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${whiskToken}`,
-          'X-Goog-Api-Key': ''
-        },
-        body: JSON.stringify(ep.body)
-      });
-      if (!res.ok) { console.warn('Whisk endpoint failed:', ep.url, res.status); continue; }
-      const data = await res.json();
-      // Try different response shapes
-      const b64 = data.imageParts?.[0]?.imageUri?.split(',')[1]
-        || data.images?.[0]?.bytesBase64Encoded
-        || data.predictions?.[0]?.bytesBase64Encoded
-        || data.generatedImages?.[0]?.image?.imageBytes;
-      if (b64) return `data:image/jpeg;base64,${b64}`;
-    } catch(e) { console.warn('Whisk error on', ep.url, e.message); }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: promptText }], role: 'user' }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  paragraph_index: { type: 'INTEGER' },
+                  scenes: {
+                    type: 'ARRAY',
+                    items: {
+                      type: 'OBJECT',
+                      properties: {
+                        script_segment: { type: 'STRING' },
+                        visual_prompt: { type: 'STRING' }
+                      },
+                      required: ['script_segment', 'visual_prompt']
+                    }
+                  }
+                },
+                required: ['paragraph_index', 'scenes']
+              }
+            }
+          }
+        })
+      }
+    );
+    if (!res.ok) throw new Error('Scene generation failed: ' + res.status);
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    return JSON.parse(text);
+  } catch(e) {
+    console.warn('Scene batch generation failed:', e.message);
+    return null;
   }
-  throw new Error('All Whisk endpoints failed');
+}
+
+// STEP 2a: Generate with Gemini 2.5 Flash (same as course app!)
+async function tryGeminiImage(prompt, apiKey) {
+  if (!apiKey) throw new Error('No API key');
+  // Gemini 2.5 Flash with image generation - exactly what the course app uses
+  const models = [
+    'gemini-2.5-flash-preview-04-17',
+    'gemini-2.0-flash-preview-image-generation',
+    'gemini-2.0-flash-exp'
+  ];
+  for (const model of models) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseModalities: ['TEXT', 'IMAGE'],
+              temperature: 1,
+              topP: 0.95,
+            }
+          })
+        }
+      );
+      if (!res.ok) { console.warn('Model', model, 'failed:', res.status); continue; }
+      const data = await res.json();
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const imgPart = parts.find(p => p.inlineData);
+      if (imgPart) {
+        console.log('Image generated with model:', model);
+        return `data:${imgPart.inlineData.mimeType};base64,${imgPart.inlineData.data}`;
+      }
+    } catch(e) { console.warn('Model', model, 'error:', e.message); }
+  }
+  throw new Error('All Gemini image models failed');
 }
 
 // STEP 2b: Pollinations fallback (free, no key) - with smart retry
@@ -617,19 +733,20 @@ async function tryPollinations(prompt, aspectRatio) {
   throw new Error('Pollinations exhausted all retries');
 }
 
-// MAIN: expand prompt with Gemini, generate image with Whisk
+// MAIN: expand prompt with Gemini text, then generate image with Gemini 2.5 Flash
 async function generateImageGemini(rawPrompt, apiKey, aspectRatio, style, whiskToken) {
-  // 1. Expand prompt with Gemini text (free, works great)
+  // 1. Expand prompt with Gemini text (same as course app)
   const expandedPrompt = await expandPromptWithGemini(rawPrompt, style, apiKey);
   console.log('Expanded prompt:', expandedPrompt);
 
-  // 2. Try Whisk first (best quality - Imagen 3)
-  if (whiskToken) {
-    try { return await tryWhisk(expandedPrompt, aspectRatio, whiskToken); }
-    catch(e) { console.warn('Whisk error:', e.message); }
+  // 2. Generate image with Gemini 2.5 Flash (exactly what course app uses)
+  if (apiKey) {
+    try { return await tryGeminiImage(expandedPrompt, apiKey); }
+    catch(e) { console.warn('Gemini image error:', e.message); }
   }
 
-  // 3. Fallback: Pollinations
+  // 3. Fallback: Pollinations (no key needed)
+  console.log('Falling back to Pollinations...');
   return await tryPollinations(expandedPrompt, aspectRatio);
 }
 
@@ -801,23 +918,55 @@ function ScriptTab({ t, lang, hasKeys, getKey, getWhisk, hasWhisk }) {
 
   const createScenes = async () => {
     if (!script.trim()) return;
-    const paragraphs = script.split('\n').filter(p=>p.trim().length>10);
-    const count = imgsPerPara==='auto' ? Math.ceil(paragraphs.length*1.2) : paragraphs.length * parseInt(imgsPerPara);
-    const initial = paragraphs.slice(0, Math.min(count,12)).map((p,i)=>({id:i,title:p.slice(0,40),status:'pending',img:null}));
-    setScenes(initial);
     setGenerating(true);
-    setProgress(0);
-    for (let i=0; i<initial.length; i++) {
+    setProgress(5);
+    setScenes([]);
+
+    // STEP 1: Generate all scene prompts at once using Gemini (like course app)
+    let scenePlan = null;
+    if (getKey()) {
+      setProgress(15);
+      scenePlan = await generateScenesFromScript(script, visualStyle, imgsPerPara, getKey());
+    }
+
+    // Build flat list of scenes from plan or fallback to paragraphs
+    let allScenes = [];
+    if (scenePlan && Array.isArray(scenePlan)) {
+      scenePlan.forEach(para => {
+        para.scenes.forEach(scene => {
+          allScenes.push({
+            id: allScenes.length,
+            title: scene.script_segment.slice(0, 50),
+            visualPrompt: scene.visual_prompt,
+            status: 'pending',
+            img: null
+          });
+        });
+      });
+    } else {
+      // Fallback: use paragraphs directly
+      const paragraphs = script.split('\n').filter(p => p.trim().length > 5);
+      paragraphs.forEach((p, i) => {
+        allScenes.push({ id: i, title: p.slice(0, 50), visualPrompt: p, status: 'pending', img: null });
+      });
+    }
+
+    setScenes(allScenes);
+    setProgress(25);
+
+    // STEP 2: Generate images for each scene
+    for (let i = 0; i < allScenes.length; i++) {
       try {
-        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'generating'}:s));
-        const prompt = `${masterPrompt ? masterPrompt+'. ' : ''}${initial[i].title}. Cinematic, high quality, ${aspect==='9:16'?'vertical portrait':'aspect ratio '+aspect}`;
+        setScenes(prev => prev.map((s, j) => j === i ? { ...s, status: 'generating' } : s));
+        const prompt = allScenes[i].visualPrompt + (masterPrompt ? '. ' + masterPrompt : '');
         const img = await generateImageGemini(prompt, getKey(), aspect, visualStyle, getWhisk());
-        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'done',img}:s));
-        if (i < initial.length - 1) await sleep(2000);
+        setScenes(prev => prev.map((s, j) => j === i ? { ...s, status: 'done', img } : s));
+        if (i < allScenes.length - 1) await sleep(1500);
       } catch(e) {
-        setScenes(prev=>prev.map((s,j)=>j===i?{...s,status:'error'}:s));
+        console.warn('Scene', i, 'error:', e.message);
+        setScenes(prev => prev.map((s, j) => j === i ? { ...s, status: 'error' } : s));
       }
-      setProgress(Math.round(((i+1)/initial.length)*100));
+      setProgress(25 + Math.round(((i + 1) / allScenes.length) * 75));
     }
     setGenerating(false);
   };
